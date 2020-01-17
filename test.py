@@ -4,10 +4,14 @@ import sys
 import numpy as np
 
 FILENAME = "C:/Users/yzhang/Downloads/dog_run.fbx"
+HIP_NAME = "Hips"
+
 POINT_COUNT = 111
+POINT_ROOT_INDEX = 60
 POINT_SAMPLE_GAP = 10
 POINT_SAMPLE_COUNT = 12
 POINT_VALUE_COUNT = 7
+
 STYLE_COUNT = 6
 BONE_VALUE_COUNT = 12
 
@@ -31,6 +35,12 @@ def AddFbxNode(fbxAnimLayer, fbxNode, fbxNodeList):
     
     fbxNodeList.append(fbxNode)
 
+def GetHipNode(hipNode, fbxNodeList):
+    for i in range(len(fbxNodeList)):
+        if fbxNodeList[i].GetName() == HIP_NAME:
+            hipNode = fbxNodeList[i]
+            return
+
 def GetRootVelocityAndSpeed(fbxAnimLayer, fbxNodeList):
     rootNode = fbxNodeList[0]
 
@@ -44,14 +54,28 @@ def GetRootVelocityAndSpeed(fbxAnimLayer, fbxNodeList):
 
 
 
-def PrepareForData(fbxAnimLayer, fbxNodeList):
-    frameCount = fbxNodeList[0].LclTranslation.GetCurve(fbxAnimLayer, "X").GetKeyCount()
-    
-    for i in range(frameCount):
-        time = FbxTime.SetFrame(i)
-        currentRootTransform = fbxNodeList[0].EvaluateGlobalTransform(time)
-
+def PrepareForPointSampleData(fbxAnimLayer, hipNode, fbxNodeList):
+    frameCount = fbxNodeList[0].LclTranslation.GetCurve(fbxAnimLayer, "X").GetKeyCount()    
+    for frameIndex in range(frameCount):
+        time = FbxTime.SetFrame(frameIndex)
+        currentHipTransform = hipNode.EvaluateGlobalTransform(time)        
         
+        currentRootTranslation = currentHipTransform.GetT()
+        currentRootTranslation.Y = 0.0
+        currentRootRotation = currentHipTransform.GetR()
+        currentRootScale = currentHipTransform.GetS()
+        currentRootTransform = FbxMatrix(currentRootTranslation, currentRootRotation, currentRootScale)
+        currentRootInverseTransform = currentRootTransform.Inverse()
+
+        sampleData = []
+        for sampleOffset in range(-POINT_SAMPLE_COUNT, POINT_COUNT - POINT_ROOT_INDEX - 1, 10):
+            sampleIndex = frameIndex + sampleOffset
+            if sampleIndex < 0 or sampleIndex > frameCount - 1:
+                sampleData.append(0.0) # position x
+                sampleData.append(0.0) # position z
+                sampleData.append(0.)
+
+
         valueCount = (POINT_SAMPLE_COUNT + STYLE_COUNT) * POINT_SAMPLE_COUNT + len(fbxNodeList) * BONE_VALUE_COUNT    
         valueArray = np.arange(valueCount)
 
