@@ -11,18 +11,27 @@ POINT_COUNT = 111
 POINT_ROOT_INDEX = 60
 POINT_SAMPLE_GAP = 10
 POINT_SAMPLE_COUNT = 12
-POINT_VALUE_COUNT = 7       # positionX, positionZ, diretionX, directionZ, velocityX, velocityZ, speed
+POINT_VALUE_COUNT = 7       # positionX/Z, diretionX/Z, velocityX/Z, speed
 
 STATE_COUNT = 6             # idle...
-BONE_VALUE_COUNT = 12
+BONE_VALUE_COUNT = 12       # positionX/Y/Z, forwardX/Y/Z, upX/Y/Z, velocityX/Y/Z
+
+def FindRootNode(fbxRootNode):
+    for nodeIndex in range(fbxRootNode.GetChildCount()):
+        if fbxRootNode.GetChild(nodeIndex).GetName() == ROOT_NAME:            
+            return fbxRootNode.GetChild(nodeIndex)
+        
+        FindRootNode(fbxRootNode)
+                
+    return None
 
 def AddAllActiveFbxNodes(fbxAnimLayer, fbxNode, fbxNodeList):
     if fbxNode.GetName() != ROOT_NAME:
         if AddFbxNode(fbxAnimLayer, fbxNode, fbxNodeList) == False:
             return False
     
-    for nodeCount in range(fbxNode.GetChildCount()):
-        AddAllActiveFbxNodes(fbxAnimLayer, fbxNode.GetChild(nodeCount), fbxNodeList)
+    for nodeIndex in range(fbxNode.GetChildCount()):
+        AddAllActiveFbxNodes(fbxAnimLayer, fbxNode.GetChild(nodeIndex), fbxNodeList)
 
     return fbxNodeList.count != 0    
 
@@ -39,33 +48,34 @@ def AddFbxNode(fbxAnimLayer, fbxNode, fbxNodeList):
         print(fbxNode.GetName() + " doesnt have active rotation curve.")
         return False
     
-    if fbxNode.GetName() == HIP_NAME and ((translationXCurve is None) or (translationYCurve is None) or (translationZCurve is None))
+    if fbxNode.GetName() == HIP_NAME and ((translationXCurve is None) or (translationYCurve is None) or (translationZCurve is None)):
         print(HIP_NAME + " doesnt have active translation curve.")
         return False
 
-    fbxNodeList.append(fbxNode)
+    fbxNodeList.append(fbxNode)    
     return True   
 
-def UpdateDefaultSampleValue(defaultSampleValue, frameIndex, deltaTime, fbxNode, currentFrameFbxMatrix, previousFrameFbxMatrix):
-    if frameIndex < 1:
+def UpdateDefaultSampleValue(defaultSampleValue, targetFrameIndex, deltaTime, fbxNode, rootPointFbxMatrixInverse):
+    if targetFrameIndex < 1:
         print("FrameIndex should be more than 1.")
         return False    
 
-    currentFrameTime = FbxTime.SetFrame(frameIndex)
-    previousFrameTime = FbxTime.SetFrame(frameIndex - 1)
-    currentHipTransform = fbxNode.EvaluateGlobalTransform(currentTime)
-    previousHipTransform = fbxNode.EvaluateGlobalTransform(previousFrameTime) * currentHipTransform.Inverse()
+    targetFrameTime = FbxTime(targetFrameIndex)    
+    targetFrameLocalTransform = fbxNode.EvaluateGlobalTransform(targetFrameTime) * rootPointFbxMatrixInverse
+
+    targetFrameTime.SetFrame(targetFrameIndex - 1)    
+    previousTargetFrameLocalTransform = fbxNode.EvaluateGlobalTransform(targetFrameTime) * rootPointFbxMatrixInverse
     
-    currentTranslation = currentFrameFbxMatrix.GetT()
-    defaultSampleValue[0] = translation[0] # position x
-    defaultSampleValue[1] = translation[2] # position z
+    localTranslation = targetFrameLocalTransform.GetT()
+    defaultSampleValue[0] = localTranslation[0] # position x
+    defaultSampleValue[1] = localTranslation[2] # position z
 
-    direction = currentFrameFbxMatrix.GetRow(2)
-    defaultSampleValue[2] = direction[0] # direction x
-    defaultSampleValue[3] = direction[2] # direction z
+    localDirection = targetFrameLocalTransform.GetRow(2)
+    defaultSampleValue[2] = localDirection[0] # direction x
+    defaultSampleValue[3] = localDirection[2] # direction z
 
-    previousTranslation = previousFrameFbxMatrix.GetT()
-    velocity = (currentTranslation - previousTranslation) / deltaTime
+    previousLocalTranslation = previousTargetFrameLocalTransform.GetT()
+    velocity = (localTranslation - previousLocalTranslation) / deltaTime
     defaultSampleValue[4] = velocity[0]
     defaultSampleValue[5] = velocity[2]
 
@@ -82,22 +92,26 @@ def PrepareTrainingPointSampleData(trainingData, deltaTime, hipNode, fbxNodeList
     
     frameCount = trainingData.shape[0]
 
-    # start from frame 1 instead of frame 0 to get the speed and velocity        
-    for frameIndex in range(1, frameCount): 
-        defaultSampleValue = np.zeros(POINT_VALUE_COUNT + STATE_COUNT)
-        if UpdateDefaultSampleValue(defaultSampleValue, frameIndex, deltaTime, hipNode, FbxMatrix(), previousHipTransform) == False:
-            return False       
-        
+    # start from frame 1 instead of frame 0 to get the speed and velocity
+    frameTime = FbxTime()
+    rootPointFbxMatrixInverse = FbxMatrix()       
+    defaultSampleValue = np.zeros(POINT_VALUE_COUNT + STATE_COUNT)
+    for frameIndex in range(1, frameCount + 1):                                
         # sample point root
-        rootSampleIndex = POINT_ROOT_INDEX // POINT_SAMPLE_GAP
+        frameTime.SetFrame(frameIndex)
+        rootPointFbxMatrixInverse = hipNode.EvaluateGlobalTransform(frameTime).Inverse()
+        if UpdateDefaultSampleValue(defaultSampleValue, frameIndex, deltaTime, hipNode, rootPointFbxMatrixInverse) == False:
+            return False
+
         rootSampleValue = np.copy(defaultSampleValue)
+        rootSampleIndex = POINT_ROOT_INDEX // POINT_SAMPLE_GAP
         trainingData[frameIndex - 1, rootSampleIndex * (POINT_VALUE_COUNT + STATE_COUNT) : (rootSampleIndex + 1) * (POINT_VALUE_COUNT + STATE_COUNT)] = rootSampleValue
 
         # sample point 0 ~ (root - 1)        
         for sampleIndex in range(1, rootSampleIndex + 1):
             sampleFrameIndex = frameIndex - sampleIndex * POINT_SAMPLE_GAP
             if sampleFrameIndex > 0 :                
-                if UpdateDefaultSampleValue(defaultSampleValue, sampleFrameIndex, deltaTime, hipNode, sampleFrameHipTransform, previousSampleFrameHipTransform) == False:
+                if UpdateDefaultSampleValue(defaultSampleValue, sampleFrameIndex, deltaTime, hipNode, rootPointFbxMatrixInverse) == False:
                     return False
             
             trainingData[frameIndex - 1, sampleIndex * (POINT_VALUE_COUNT + STATE_COUNT) : (sampleIndex + 1) * (POINT_VALUE_COUNT + STATE_COUNT)] = defaultSampleValue
@@ -106,12 +120,12 @@ def PrepareTrainingPointSampleData(trainingData, deltaTime, hipNode, fbxNodeList
         for sampleIndex in range(rootSampleIndex + 1, POINT_SAMPLE_COUNT):
             sampleFrameIndex = frameIndex + sampleIndex * POINT_SAMPLE_GAP
             if sampleFrameIndex < frameCount:
-                if UpdateDefaultSampleValue(defaultSampleValue, sampleFrameIndex, deltaTime, hipNode, sampleFrameHipTransform, previousSampleFrameHipTransform) == False:
+                if UpdateDefaultSampleValue(defaultSampleValue, sampleFrameIndex, deltaTime, hipNode, rootPointFbxMatrixInverse) == False:
                     return False
 
-            trainingData[frameIndex - 1, sampleIndex * (POINT_VALUE_COUNT + STATE_COUNT) : (sampleIndex + 1) * (POINT_VALUE_COUNT + STATE_COUNT)] = defaultSampleValue
+            trainingData[frameIndex - 1, sampleIndex * (POINT_VALUE_COUNT + STATE_COUNT) : (sampleIndex + 1) * (POINT_VALUE_COUNT + STATE_COUNT)] = rootSampleValue
 
-        print("Preparing Training Point Sample Data: {0}/{1}".format(frameIndex, frameCount - 1))
+        print("Preparing Training Point Sample Data: {0}/{1}".format(frameIndex, frameCount))
 
     print("Preparing Training Point Sample Data Complete!")
     return True
@@ -123,15 +137,19 @@ def PrepareTrainingBoneData(trainingData, deltaTime, hipNode, fbxNodeList):
     
     frameCount = trainingData.shape[0]
 
+    frameTime = FbxTime()
+    previousFrameTime = FbxTime()
     boneData = np.zeros(BONE_VALUE_COUNT)    
     boneVelocity = FbxVector4()
     boneTransform = FbxMatrix()
     previousBoneTransform = FbxMatrix()
-    for frameIndex in range(1, frameCount):
-        frameTime = FbxTime.SetFrame(frameIndex)
-        previousFrameTime = FbxTime.SetFrame(frameIndex - 1)
+    previousRootInverseTransform = FbxMatrix()
+    dataIndexOffset = (POINT_VALUE_COUNT + STATE_COUNT) * POINT_SAMPLE_COUNT
+    for frameIndex in range(1, frameCount + 1):        
+        previousFrameTime.SetFrame(frameIndex - 1)
         previousRootInverseTransform = hipNode.EvaluateGlobalTransform(previousFrameTime).Inverse()
 
+        frameTime.SetFrame(frameIndex)
         for boneIndex in range(len(fbxNodeList)):
             boneTransform = fbxNodeList[boneIndex].EvaluateGlobalTransform(frameTime)
             
@@ -147,15 +165,15 @@ def PrepareTrainingBoneData(trainingData, deltaTime, hipNode, fbxNodeList):
             boneData[7] = boneTransform.GetRow(1)[1]    # up y
             boneData[8] = boneTransform.GetRow(1)[2]    # up z
 
-            previousBoneTransform = fbxNodeList[boneIndex].EvaluateGlobalTransform(frameTime - 1)
+            previousBoneTransform = fbxNodeList[boneIndex].EvaluateGlobalTransform(previousFrameTime)
             boneVelocity = (boneTransform.GetT() - previousBoneTransform.GetT()) / deltaTime
             boneData[9] = boneVelocity[0]               # velocity x
             boneData[10] = boneVelocity[1]              # velocity y
             boneData[11] = boneVelocity[2]              # velocity z
 
-            trainingData[frameIndex - 1, (POINT_VALUE_COUNT + STATE_COUNT) * POINT_SAMPLE_COUNT + boneIndex * BONE_VALUE_COUNT : (boneIndex + 1) * BONE_VALUE_COUNT] = boneData
+            trainingData[frameIndex - 1, dataIndexOffset + boneIndex * BONE_VALUE_COUNT : dataIndexOffset + (boneIndex + 1) * BONE_VALUE_COUNT] = boneData
 
-        print("Preparing Training Bone Data: {0}/{1}".format(frameIndex, frameCount - 1))
+        print("Preparing Training Bone Data: {0}/{1}".format(frameIndex, frameCount))
 
     print("Preparing Training Bone Data Complete!")
     return True
@@ -168,15 +186,11 @@ if __name__ == "__main__":
         print("Failed to load fbx.")
         sys.exit(1)
 
-    fbxRootNode = fbxScene.GetRootNode()
+    fbxRootNode = FindRootNode(fbxScene.GetRootNode())
     if fbxRootNode is None:
-        print("There is no root node in fbx.")
+        print("There is no node in fbx named as {0}.".format(ROOT_NAME))
         sys.exit(1)
-
-    if fbxRootNode.GetName() != ROOT_NAME:
-        print("Root node's name should be root.")
-        sys.exit(1)
-
+    
     if fbxScene.GetSrcObjectCount(FbxCriteria.ObjectType(FbxAnimStack.ClassId)) != 1:
         print("Only support one AnimStack in one fbx.")
         sys.exit(1)
@@ -194,19 +208,19 @@ if __name__ == "__main__":
 
     hipTranslationXCurve = fbxNodeList[0].LclTranslation.GetCurve(fbxAnimLayer, "X")
     frameCount = hipTranslationXCurve.KeyGetCount()
-    boneCount = fbxNodeList.count
+    boneCount = len(fbxNodeList)
     dataCount = POINT_SAMPLE_COUNT * (POINT_VALUE_COUNT + STATE_COUNT) + boneCount * BONE_VALUE_COUNT
-    if frameCount == 0 or dataCount == 0:
-        print("Frame count or data count is zeor.")
+    if frameCount < 2 or dataCount == 0:
+        print("Frame count or data count is wrong.")
         sys.exit(1)
 
-    trainingData = np.zeros((frameCount, dataCount))
-    deltaTime = hipTranslationXCurve.KeyGetTime(1) - hipTranslationXCurve.KeyGetTime(0)    
-    if PreparePointSampleData(trainingData, deltaTime, fbxNodeList[0], fbxNodeList) == False:
+    trainingData = np.zeros((frameCount - 2, dataCount))
+    frameRate = FbxTime.GetFrameRate(fbxScene.GetGlobalSettings().GetTimeMode()) 
+    if PrepareTrainingPointSampleData(trainingData, 1 / frameRate, fbxNodeList[0], fbxNodeList) == False:
         print("Failed to prepare training point sample data.")
         sys.exit(1)
 
-    if PrepareBoneData(trainingData, deltaTime, fbxNodeList[0], fbxNodeList) == False:
+    if PrepareTrainingBoneData(trainingData, 1 / frameRate, fbxNodeList[0], fbxNodeList) == False:
         print("Failed to prepare training bone data.")
         sys.exit(1)
 
