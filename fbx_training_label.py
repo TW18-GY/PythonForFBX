@@ -1,3 +1,9 @@
+# install python fbx sdk
+# http://download.autodesk.com/us/fbx/20112/FBX_SDK_HELP/index.html?url=WS73099cc142f48755-751de9951262947c01c-6dc7.htm,topicNumber=d0e8430
+
+# python fbx sdk guide
+# https://help.autodesk.com/view/FBX/2020/ENU/
+
 from fbx import *
 import FbxCommon
 import sys
@@ -13,7 +19,7 @@ POINT_SAMPLE_GAP = 10
 POINT_SAMPLE_COUNT = 12
 
 INPUT_STATE_COUNT = 6             # idle...
-INPUT_POINT_VALUE_COUNT = 7       # positionX/Z, diretionX/Z, velocityX/Z, speed
+INPUT_POINT_VALUE_COUNT = 7       # positionX/Z, diretionX/Z, velocityX/Z, speed`
 INPUT_BONE_VALUE_COUNT = 12       # positionX/Y/Z, forwardX/Y/Z, upX/Y/Z, velocityX/Y/Z
 
 OUTPUT_POINT_VALUE_COUNT = 6      # positionX/Z, diretionX/Z, velocityX/Z
@@ -305,16 +311,8 @@ if __name__ == "__main__":
 
     labelDataCount = OUTPUT_POINT_VALUE_COUNT * (POINT_SAMPLE_COUNT - POINT_ROOT_INDEX // POINT_SAMPLE_COUNT) + OUTPUT_BONE_VALUE_COUNT * boneCount
     labelData = np.zeros((frameCount - 2, labelDataCount))
+    PrepareLabelPointData(labelData, 1/ frameRate, fbxNodeList[0])
+    PrepareLabelBoneData(labelData, 1/ frameRate, fbxNodeList[0], fbxNodeList)
 
     fbxSdkManager.Destroy()
     sys.exit(0)
-    
-    
-
-    
-    
-
-
-
-
-
